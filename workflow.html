@@ -208,12 +208,6 @@
     margin-top: 4px; 
     text-transform: uppercase;
   }
-  .pink-text {
-    color: #ffb3d9;
-    font-size: 13px;
-    margin-top: 10px;
-    font-style: italic;
-  }
 </style>
 </head>
 <body>
@@ -286,7 +280,7 @@
       <span class="badge auto">openrouter</span>
     </div>
     <div class="node-desc">model: google/gemini-2.5-flash-lite · temp 0.3 · json mode</div>
-    <div class="explanation">3 retries with exponential backoff · cached in cache.json</div>
+    <div class="explanation">3 retries with exponential backoff · cached in llm_cache.json</div>
   </div>
 
   <div class="connector"></div>
@@ -312,7 +306,7 @@
       📉 sell if score ≤ 4.75<br>
       ⚠️ emergency: rsi > 75 → sell
     </div>
-    <div class="explanation">weights found by differential evolution (tune_v3.py)</div>
+    <div class="explanation">weights found by differential evolution (optimize.py)</div>
   </div>
 
   <div class="connector"></div>
@@ -337,7 +331,7 @@
       <span class="node-title">export results</span>
       <span class="badge auto">csv</span>
     </div>
-    <div class="node-desc">trades_log.csv · console metrics</div>
+    <div class="node-desc">trades.csv · console metrics</div>
     <div class="node-details">
       📄 columns: date, ticker, price, decision, reason, sentiment, rsi, confidence<br>
       📊 metrics: sharpe, total return, max drawdown, win rate
@@ -370,7 +364,6 @@
     <div class="stat-label">win rate</div>
   </div>
 </div>
-
 
 </body>
 </html>
