@@ -78,5 +78,5 @@ ELSE → HOLD
 ├── news.csv # news headlines (50 articles)
 ├── main.py # full pipeline (LLM + scoring + backtest)
 ├── optimize.py # weight optimizer (differential evolution)
-├── trades.csv # generated trade log (created on run)
+├── trades.csv # generated trade log 
 ├── workflow.html # pipeline visualization
