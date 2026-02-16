@@ -1,7 +1,8 @@
 """
-Crypto Trading Bot - Simplified 4-Component Scoring Strategy
-Uses cached LLM analysis with optimized linear weights.
-Model: 4 features (sentiment, RSI, BB, LLM action), no MACD/volatility/reversal.
+🌸 CRYPTO TRADING BOT · 4-COMPONENT LINEAR SCORING
+======================================================
+Uses cached LLM analysis + optimized weights (from tune_v3.py)
+Features: sentiment, RSI, Bollinger Bands, LLM action
 """
 
 import os
@@ -15,44 +16,45 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# 💗 CONFIGURATION (optimized by differential evolution)
 # ============================================================
-# CONFIGURATION
-# ============================================================
-
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 MODEL = "google/gemini-2.5-flash-lite"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# # input/output files
 FEATURES_CSV = "crypto_features_3months.csv"
 NEWS_CSV = "crypto_news_3months.csv"
 OUTPUT_CSV = "trades_log.csv"
 
+# # backtest settings
 STARTING_CAPITAL = 10000
 TRANSACTION_FEE = 0.001  # 0.1%
 
-# Optimized weights (scipy.optimize.differential_evolution, 4-component model)
-W_SENTIMENT = 17.9413
-W_RSI = 2.2901
-W_BB = 12.9918
-W_ACTION = 19.0590
-BUY_THRESH = 3.5803
-SELL_THRESH = 4.7507
-ALLOC_PCT = 0.10
+# # OPTIMIZED WEIGHTS (from tune_v3.py)
+# # these maximize sharpe ratio on historical data
+W_SENTIMENT = 17.9413   # llm sentiment dominates
+W_RSI = 2.2901          # rsi adds small signal
+W_BB = 12.9918          # bollinger bands matter
+W_ACTION = 19.0590      # llm action is crucial
+BUY_THRESH = 3.5803     # buy if score ≥ this
+SELL_THRESH = 4.7507    # sell if score ≤ this
+ALLOC_PCT = 0.10        # 10% of capital per buy
 
 
+# 📦 MODULE 1: DATA LOADING
 # ============================================================
-# MODULE 1: DATA LOADING
-# ============================================================
-
 def load_data():
-    print("Loading market data...")
+    """load market features + news, merge by date"""
+    print("🌸 loading market data...")
     features = pd.read_csv(FEATURES_CSV)
-    print(f"  Market data: {len(features)} rows, {len(features.columns)} columns")
+    print(f"   → {len(features)} rows, {len(features.columns)} columns")
 
-    print("Loading news data...")
+    print("🌸 loading news data...")
     news = pd.read_csv(NEWS_CSV)
-    print(f"  News data: {len(news)} rows")
+    print(f"   → {len(news)} articles")
 
+    # # group news by date for quick lookup
     news_by_date = {}
     for _, row in news.iterrows():
         date = str(row["date"]).strip()
@@ -63,24 +65,28 @@ def load_data():
         news_by_date[date].append(f"{title}: {body[:200]}")
 
     def get_news_text(date):
+        """get up to 3 news snippets for a given date"""
         articles = news_by_date.get(str(date).strip(), [])
         return "\n\n".join(articles[:3]) if articles else "No significant news today"
 
+    # # attach news to market data
     features["news_text"] = features["date"].apply(get_news_text)
     features = features.sort_values(["date", "ticker"]).reset_index(drop=True)
 
-    print(f"  Date range: {features['date'].min()} to {features['date'].max()}")
-    print(f"  Tickers: {sorted(features['ticker'].unique())}")
-    print(f"  Rows with news: {(features['news_text'] != 'No significant news today').sum()}")
+    print(f"   📅 date range: {features['date'].min()} → {features['date'].max()}")
+    print(f"   💰 tickers: {sorted(features['ticker'].unique())}")
+    print(f"   📰 rows with news: {(features['news_text'] != 'No significant news today').sum()} ({features['news_text'].ne('No significant news today').mean()*100:.1f}%)")
 
     return features
 
 
+# 🤖 MODULE 2: LLM PROMPT BUILDER
 # ============================================================
-# MODULE 2: LLM PROMPT BUILDER
-# ============================================================
-
 def build_prompt(row):
+    """
+    create structured prompt for gemini 2.5 flash
+    includes technical indicators + news (if any)
+    """
     close = float(row.get("close", 0))
     ma7 = float(row.get("ma7", 0))
     ma20 = float(row.get("ma20", 0)) if pd.notna(row.get("ma20")) else 0
@@ -90,10 +96,12 @@ def build_prompt(row):
     vol7d = float(row.get("volatility_7d", 0))
     returns = float(row.get("returns", 0))
 
+    # # human-readable zones (helps llm understand context)
     rsi_zone = "OVERSOLD" if rsi < 30 else ("OVERBOUGHT" if rsi > 70 else "neutral")
     bb_zone = "NEAR LOWER BAND" if bb_pos < 0.2 else ("NEAR UPPER BAND" if bb_pos > 0.8 else "middle")
     has_news = row["news_text"] != "No significant news today"
 
+    # # prompt designed for structured JSON output
     prompt = f"""You are a conservative cryptocurrency risk analyst. Output ONLY valid JSON.
 
 Date: {row['date']} | Coin: {row['ticker']}
@@ -108,11 +116,13 @@ Output JSON: {{"sentiment_score": <-1 to 1>, "market_mood": "<bearish|neutral|bu
     return prompt
 
 
+# 🌐 MODULE 3: OPENROUTER API CLIENT
 # ============================================================
-# MODULE 3: OPENROUTER API CLIENT
-# ============================================================
-
 def call_llm(prompt, max_retries=3):
+    """
+    call gemini 2.5 flash via openrouter
+    includes retry logic with exponential backoff
+    """
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -120,7 +130,7 @@ def call_llm(prompt, max_retries=3):
     payload = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
+        "temperature": 0.3,           # low temp = consistent
         "max_tokens": 300,
         "response_format": {"type": "json_object"},
     }
@@ -133,19 +143,30 @@ def call_llm(prompt, max_retries=3):
             return json.loads(data["choices"][0]["message"]["content"])
         except (requests.RequestException, json.JSONDecodeError, KeyError, IndexError) as e:
             if attempt < max_retries - 1:
-                print(f"    Retry {attempt+1}/{max_retries}: {e} (waiting {2**attempt}s)")
-                time.sleep(2 ** attempt)
+                wait = 2 ** attempt
+                print(f"   ⚠️ retry {attempt+1}/{max_retries}: {e} (waiting {wait}s)")
+                time.sleep(wait)
             else:
-                return {"sentiment_score": 0, "market_mood": "neutral", "trend_strength": 0,
-                        "reversal_probability": 0, "risk_level": "medium",
-                        "recommended_action": "hold", "confidence": 0, "reasoning": "LLM failed"}
+                # # fallback response if all retries fail
+                return {
+                    "sentiment_score": 0, 
+                    "market_mood": "neutral", 
+                    "trend_strength": 0,
+                    "reversal_probability": 0, 
+                    "risk_level": "medium",
+                    "recommended_action": "hold", 
+                    "confidence": 0, 
+                    "reasoning": "LLM failed"
+                }
 
 
+# 📐 MODULE 4: TRADING LOGIC (4-COMPONENT LINEAR SCORING)
 # ============================================================
-# MODULE 4: TRADING LOGIC (4-Component Linear Scoring)
-# ============================================================
-
 def trading_decision(analysis, indicators):
+    """
+    convert llm output + indicators into buy/sell/hold
+    uses 4-component linear model with optimized weights
+    """
     sentiment = float(analysis.get("sentiment_score", 0) or 0)
     risk_level = str(analysis.get("risk_level", "medium")).lower()
     llm_action = str(analysis.get("recommended_action", "hold")).lower()
@@ -154,66 +175,81 @@ def trading_decision(analysis, indicators):
     rsi = float(indicators.get("rsi", 50))
     bb_pos = float(indicators.get("bb_position", 0.5))
 
-    # Risk gate
+    # # RISK GATE #1: extreme risk → force sell
     if risk_level == "extreme":
-        return "sell", "EXTREME RISK", confidence
+        return "sell", "EXTREME RISK (forced sell)", confidence
 
-    # 4-component linear score
-    score = (W_SENTIMENT * sentiment
-             + W_RSI * (50 - rsi) / 50
-             + W_BB * (0.5 - bb_pos) / 0.5)
+    # # 4-component linear score
+    # # each component normalized to roughly -1..+1
+    score = (W_SENTIMENT * sentiment                     # sentiment: -1..+1
+             + W_RSI * (50 - rsi) / 50                   # rsi: 0..100 → -1..+1
+             + W_BB * (0.5 - bb_pos) / 0.5)              # bb: 0..1 → -1..+1
 
-    if llm_action == "buy": score += W_ACTION
-    elif llm_action == "sell": score -= W_ACTION
+    # # llm action: buy → +weight, sell → -weight, hold → 0
+    if llm_action == "buy": 
+        score += W_ACTION
+    elif llm_action == "sell": 
+        score -= W_ACTION
 
-    # Decision
+    # # apply thresholds
     decision = "hold"
     reason = f"score={score:.1f}"
 
     if score >= BUY_THRESH:
         decision = "buy"
-        reason = f"BUY: score={score:.1f} (sent={sentiment:.2f}, rsi={rsi:.0f}, bb={bb_pos:.2f}, llm={llm_action})"
+        reason = f"BUY signal: score={score:.1f} (sent={sentiment:.2f}, rsi={rsi:.0f}, bb={bb_pos:.2f}, llm={llm_action})"
 
     if score <= SELL_THRESH:
         decision = "sell"
-        reason = f"SELL: score={score:.1f} (sent={sentiment:.2f}, rsi={rsi:.0f}, bb={bb_pos:.2f}, llm={llm_action})"
+        reason = f"SELL signal: score={score:.1f} (sent={sentiment:.2f}, rsi={rsi:.0f}, bb={bb_pos:.2f}, llm={llm_action})"
 
+    # # EMERGENCY GATE #2: rsi > 75 overrides everything
     if rsi > 75:
         decision = "sell"
-        reason = f"EMERGENCY: RSI={rsi:.1f}"
+        reason = f"EMERGENCY SELL: RSI overbought ({rsi:.1f} > 75)"
 
     return decision, reason, confidence
 
 
+# 📊 MODULE 5: BACKTESTING ENGINE
 # ============================================================
-# MODULE 5: BACKTESTING ENGINE
-# ============================================================
-
 def run_backtest(trades_df):
-    print("\n=== BACKTESTING ===")
+    """
+    simulate trading with $10k starting capital
+    tracks positions, calculates sharpe, drawdown, win rate
+    """
+    print("\n📈 === BACKTESTING ===")
     capital = STARTING_CAPITAL
-    positions = {}
+    positions = {}          # ticker → {qty, avg_price}
     daily_portfolio_values = []
-    trade_results = []
+    trade_results = []      # track each trade for win rate
 
     dates = sorted(trades_df["date"].unique())
     for date in dates:
         day_trades = trades_df[trades_df["date"] == date]
+        
+        # # execute all trades for this day
         for _, trade in day_trades.iterrows():
             ticker, price, decision = trade["ticker"], float(trade["price"]), trade["decision"]
 
             if decision == "buy" and capital > 0:
+                # # allocate fixed % of remaining capital
                 alloc = capital * ALLOC_PCT
                 fee = alloc * TRANSACTION_FEE
                 invest = alloc - fee
                 qty = invest / price
+                
                 if ticker not in positions:
                     positions[ticker] = {"qty": 0, "avg_price": 0}
-                old_qty = positions[ticker]["qty"]
-                old_cost = old_qty * positions[ticker]["avg_price"]
-                new_qty = old_qty + qty
-                positions[ticker]["qty"] = new_qty
-                positions[ticker]["avg_price"] = (old_cost + invest) / new_qty if new_qty > 0 else 0
+                
+                old = positions[ticker]
+                new_qty = old["qty"] + qty
+                # # update average cost basis
+                if new_qty > 0:
+                    positions[ticker] = {
+                        "qty": new_qty,
+                        "avg_price": (old["qty"] * old["avg_price"] + invest) / new_qty
+                    }
                 capital -= alloc
                 trade_results.append({"action": "buy", "pnl": 0})
 
@@ -223,10 +259,12 @@ def run_backtest(trades_df):
                 fee = proceeds * TRANSACTION_FEE
                 net = proceeds - fee
                 pnl = net - (qty * positions[ticker]["avg_price"])
+                
                 capital += net
                 trade_results.append({"action": "sell", "pnl": pnl})
                 positions[ticker] = {"qty": 0, "avg_price": 0}
 
+        # # mark portfolio to market at day end
         portfolio_value = capital
         for ticker, pos in positions.items():
             if pos["qty"] > 0:
@@ -235,37 +273,47 @@ def run_backtest(trades_df):
                     portfolio_value += pos["qty"] * float(ticker_row.iloc[0]["price"])
         daily_portfolio_values.append({"date": date, "value": portfolio_value})
 
+    # # calculate performance metrics
     pv = pd.DataFrame(daily_portfolio_values)
     if len(pv) > 1:
         pv["daily_return"] = pv["value"].pct_change().dropna()
         pv = pv.dropna()
+        
         avg_return = pv["daily_return"].mean()
         std_return = pv["daily_return"].std()
         sharpe = (avg_return / std_return) * math.sqrt(365) if std_return > 0 else 0
+        
         total_return = (pv["value"].iloc[-1] / STARTING_CAPITAL - 1) * 100
+        
         max_val = pv["value"].cummax()
         drawdown = ((pv["value"] - max_val) / max_val).min() * 100
+        
         sell_trades = [t for t in trade_results if t["action"] == "sell"]
         wins = len([t for t in sell_trades if t.get("pnl", 0) > 0])
         win_rate = (wins / len(sell_trades) * 100) if sell_trades else 0
         buy_trades = [t for t in trade_results if t["action"] == "buy"]
 
-        print(f"  Sharpe Ratio:  {sharpe:.4f}")
-        print(f"  Total Return:  {total_return:+.2f}%")
-        print(f"  Max Drawdown:  {drawdown:.2f}%")
-        print(f"  Win Rate:      {win_rate:.1f}%")
-        print(f"  Total Trades:  {len(trade_results)} ({len(buy_trades)} buys, {len(sell_trades)} sells)")
-        print(f"  Final Value:   ${pv['value'].iloc[-1]:.2f}")
-        return {"sharpe": sharpe, "total_return": total_return, "max_drawdown": drawdown,
-                "win_rate": win_rate, "final_value": pv["value"].iloc[-1]}
+        print(f"   ✦ Sharpe Ratio:  {sharpe:.4f}")
+        print(f"   ✦ Total Return:  {total_return:+.2f}%")
+        print(f"   ✦ Max Drawdown:  {drawdown:.2f}%")
+        print(f"   ✦ Win Rate:      {win_rate:.1f}%")
+        print(f"   ✦ Total Trades:  {len(trade_results)} ({len(buy_trades)} buys, {len(sell_trades)} sells)")
+        print(f"   ✦ Final Value:   ${pv['value'].iloc[-1]:.2f}")
+        
+        return {
+            "sharpe": sharpe, 
+            "total_return": total_return, 
+            "max_drawdown": drawdown,
+            "win_rate": win_rate, 
+            "final_value": pv["value"].iloc[-1]
+        }
     return None
 
 
+# 🚀 MODULE 6: MAIN PIPELINE
 # ============================================================
-# MODULE 6: MAIN PIPELINE
-# ============================================================
-
 def process_row(idx, row, total):
+    """process a single row: build prompt, call llm, make decision"""
     prompt = build_prompt(row)
     analysis = call_llm(prompt)
     indicators = {"rsi": row.get("rsi", 50), "bb_position": row.get("bb_position", 0.5)}
@@ -288,10 +336,14 @@ def process_row(idx, row, total):
 
 def main():
     start_time = time.time()
+    
+    print("🌸" + "="*70)
+    print("🌸 CRYPTO TRADING BOT · 4-COMPONENT LINEAR MODEL")
+    print("🌸" + "="*70)
 
-    # Check if cache exists
+    # # Check if cache exists (saves time + api costs)
     if os.path.exists("llm_cache.json"):
-        print("Found llm_cache.json - using cached LLM results (no API calls)")
+        print("\n💾 found llm_cache.json - using cached results (no API calls)")
         with open("llm_cache.json") as f:
             cache = json.load(f)
 
@@ -313,10 +365,11 @@ def main():
                 "confidence": f"{confidence:.3f}",
             })
     else:
-        print("No cache found - calling LLM API...")
+        # # first run: call LLM API for every row
+        print("\n🆕 no cache found - calling LLM API (this will take ~30min)...")
         features = load_data()
         total = len(features)
-        print(f"\nProcessing {total} rows (20 concurrent workers)...")
+        print(f"\n🚀 processing {total} rows (20 concurrent workers)...")
         print("=" * 60)
 
         results = [None] * total
@@ -334,10 +387,11 @@ def main():
                     results[result["idx"]] = result
                     completed += 1
                     if completed % 20 == 0 or completed == total:
-                        print(f"  Progress: {completed}/{total} ({completed/total*100:.0f}%)")
+                        print(f"   ⏳ progress: {completed}/{total} ({completed/total*100:.0f}%)")
                 except Exception as e:
                     idx = futures[future]
                     row = features.iloc[idx]
+                    # # fallback on error
                     results[idx] = {
                         "idx": idx, "date": row["date"], "ticker": row["ticker"],
                         "price": float(row["close"]), "decision": "hold",
@@ -346,7 +400,7 @@ def main():
                     }
                     completed += 1
 
-        # Save cache
+        # # Save cache for future runs
         cache_data = []
         for r in results:
             if r:
@@ -355,28 +409,34 @@ def main():
                     "price": r["price"], "analysis": r.get("analysis", {}),
                     "indicators": r.get("indicators", {}),
                 })
+                # # remove internal fields before exporting
                 r.pop("idx", None)
                 r.pop("analysis", None)
                 r.pop("indicators", None)
 
         with open("llm_cache.json", "w") as f:
             json.dump(cache_data, f)
-        print(f"\nSaved cache to llm_cache.json")
+        print(f"\n💾 saved cache to llm_cache.json (next runs will be instant)")
 
-    # Export
+    # # Export results
     trades_df = pd.DataFrame(results)
     trades_df.to_csv(OUTPUT_CSV, index=False)
+    
     total = len(trades_df)
     buy_c = len(trades_df[trades_df["decision"] == "buy"])
     sell_c = len(trades_df[trades_df["decision"] == "sell"])
     hold_c = len(trades_df[trades_df["decision"] == "hold"])
-    print(f"\nExported {total} trades to {OUTPUT_CSV}")
-    print(f"  Buy:  {buy_c} ({buy_c/total*100:.1f}%)")
-    print(f"  Sell: {sell_c} ({sell_c/total*100:.1f}%)")
-    print(f"  Hold: {hold_c} ({hold_c/total*100:.1f}%)")
+    
+    print(f"\n📊 exported {total} trades to {OUTPUT_CSV}")
+    print(f"   💗 buys:  {buy_c} ({buy_c/total*100:.1f}%)")
+    print(f"   💔 sells: {sell_c} ({sell_c/total*100:.1f}%)")
+    print(f"   🤍 holds: {hold_c} ({hold_c/total*100:.1f}%)")
 
+    # # Run backtest
     metrics = run_backtest(trades_df)
-    print(f"\nCompleted in {time.time()-start_time:.1f}s")
+    
+    elapsed = time.time() - start_time
+    print(f"\n✨ completed in {elapsed:.1f}s")
     return metrics
 
 
