@@ -1,4 +1,3 @@
-
 {
   "name": "Telegram Trading Bot",
   "nodes": [
@@ -39,7 +38,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first().json;\n\n// ЗДЕСЬ ВСТАВЬТЕ ВАШ РЕАЛЬНЫЙ CHAT ID\nconst YOUR_CHAT_ID = '1756518067';  // ← ЗАМЕНИТЕ!\n\nlet emoji = '⚪';\nif (item.signal === 'BUY') emoji = '🟢';\nif (item.signal === 'SELL') emoji = '🔴';\n\nconst message = `${emoji} <b>${item.symbol}</b> @ $${item.price}\\n\\n` +\n  `📊 Сигнал: ${item.signal}\\n` +\n  `📈 RSI: ${item.rsi}`;\n\nreturn {\n  chatId: YOUR_CHAT_ID,\n  text: message,\n  parse_mode: 'HTML'\n};"
+        "jsCode": "const item = $input.first().json;\nconst YOUR_CHAT_ID = '1756518067';\nlet emoji = '⚪';\nif (item.signal === 'BUY') emoji = '🟢';\nif (item.signal === 'SELL') emoji = '🔴';\nconst message = `${emoji} <b>${item.symbol}</b> @ $${item.price}\\n\\n📊 Сигнал: ${item.signal}\\n📈 RSI: ${item.rsi}`;\nreturn {\n  chatId: YOUR_CHAT_ID,\n  text: message,\n  parse_mode: 'HTML'\n};"
       },
       "name": "Format",
       "type": "n8n-nodes-base.code",
