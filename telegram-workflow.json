@@ -1,0 +1,64 @@
+
+{
+  "name": "Telegram Trading Bot",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "symbol",
+              "value": "BTCUSDT"
+            },
+            {
+              "name": "signal",
+              "value": "SELL"
+            },
+            {
+              "name": "rsi",
+              "value": "72.5"
+            },
+            {
+              "name": "price",
+              "value": "52341.23"
+            }
+          ]
+        }
+      },
+      "name": "Test Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// ЗДЕСЬ ВСТАВЬТЕ ВАШ РЕАЛЬНЫЙ CHAT ID\nconst YOUR_CHAT_ID = '1756518067';  // ← ЗАМЕНИТЕ!\n\nlet emoji = '⚪';\nif (item.signal === 'BUY') emoji = '🟢';\nif (item.signal === 'SELL') emoji = '🔴';\n\nconst message = `${emoji} <b>${item.symbol}</b> @ $${item.price}\\n\\n` +\n  `📊 Сигнал: ${item.signal}\\n` +\n  `📈 RSI: ${item.rsi}`;\n\nreturn {\n  chatId: YOUR_CHAT_ID,\n  text: message,\n  parse_mode: 'HTML'\n};"
+      },
+      "name": "Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "token": "8645012892:AAEv9JLyi3tSPOcyxQitJrBM4mz5Swzi3OQ",
+        "chatId": "={{ $json.chatId }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "parse_mode": "={{ $json.parse_mode }}"
+        }
+      },
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 300]
+    }
+  ]
+}
