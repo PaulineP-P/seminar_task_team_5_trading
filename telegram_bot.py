@@ -18,8 +18,13 @@ Setup:
 import os
 import json
 import logging
+import io
 import pandas as pd
 import requests
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -44,6 +49,7 @@ MODEL = "google/gemini-2.5-flash-lite"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 TRADES_CSV = "trades.csv"
 FEATURES_CSV = "crypto_features_3months.csv"
+AB_RESULTS_CSV = "ab_results.csv"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -169,6 +175,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Команды:</b>\n"
         "  /analyze &lt;TICKER&gt; — анализ монеты (напр. <code>/analyze BTC</code>)\n"
         "  /signal — последние торговые сигналы системы\n"
+        "  /abtest — график A vs B стратегий за 30 дней 📊\n"
         "  /tickers — список доступных монет\n"
         "  /help — справка\n\n"
         "💡 Просто напиши тикер (напр. <code>ETH</code>) и получи анализ!"
@@ -185,6 +192,10 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "настроение рынка, сценарии и риски.\n\n"
         "<b>/signal</b>\n"
         "Последние 5 сигналов бота (buy/sell) из backtesta.\n\n"
+        "<b>/abtest</b>\n"
+        "График A vs B стратегий за последние 30 дней. "
+        "Синий фон = B побеждает, красный = A побеждает. "
+        "Отправляется с текстовым резюме.\n\n"
         "<b>/tickers</b>\n"
         "Показать все доступные монеты из датасета.\n\n"
         "⚠️ <i>Весь анализ носит образовательный характер. "
@@ -327,6 +338,106 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def abtest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /abtest — build A vs B performance chart (30 last days) and send via Telegram.
+    Blue background = B wins that day, Red = A wins.
+    """
+    wait_msg = await update.message.reply_text("📊 Строю A/B график... ⏳")
+
+    try:
+        if not os.path.exists(AB_RESULTS_CSV):
+            await wait_msg.edit_text(
+                "❌ Файл <code>ab_results.csv</code> не найден.\n"
+                "Запусти <code>main.py</code> чтобы сгенерировать результаты.",
+                parse_mode="HTML"
+            )
+            return
+
+        df = pd.read_csv(AB_RESULTS_CSV)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").tail(30).reset_index(drop=True)
+
+        if df.empty:
+            await wait_msg.edit_text("❌ Нет данных в ab_results.csv.")
+            return
+
+        # ── Build chart ──────────────────────────────────────────
+        fig, ax = plt.subplots(figsize=(12, 5))
+        fig.patch.set_facecolor("#1a1a2e")
+        ax.set_facecolor("#1a1a2e")
+
+        dates = df["date"].tolist()
+        val_a = df["value_a"].tolist()
+        val_b = df["value_b"].tolist()
+
+        # Coloured day backgrounds
+        for i in range(len(dates)):
+            winner = df.loc[i, "winner"]
+            color = "#1e3a5f" if winner == "B" else "#5f1e1e"  # blue / red
+            ax.axvspan(i - 0.5, i + 0.5, alpha=0.4, color=color, linewidth=0)
+
+        x = range(len(dates))
+        ax.plot(x, val_a, color="#e74c3c", linewidth=2, label="Variant A", marker="o", markersize=3)
+        ax.plot(x, val_b, color="#3498db", linewidth=2, label="Variant B", marker="o", markersize=3)
+
+        # X-axis labels (every 5 days)
+        step = max(1, len(dates) // 6)
+        ax.set_xticks(list(range(0, len(dates), step)))
+        ax.set_xticklabels(
+            [dates[i].strftime("%m/%d") for i in range(0, len(dates), step)],
+            color="white", fontsize=8
+        )
+        ax.yaxis.set_tick_params(labelcolor="white")
+        ax.set_ylabel("Portfolio Value ($)", color="white")
+        ax.set_title("A/B Test Results: Last 30 Days", color="white", fontsize=13, fontweight="bold")
+
+        patch_b = mpatches.Patch(color="#1e3a5f", alpha=0.7, label="B wins day")
+        patch_a = mpatches.Patch(color="#5f1e1e", alpha=0.7, label="A wins day")
+        ax.legend(handles=[ax.lines[0], ax.lines[1], patch_b, patch_a],
+                  facecolor="#1a1a2e", labelcolor="white", fontsize=8)
+
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444")
+        ax.grid(axis="y", color="#333", linewidth=0.5)
+
+        plt.tight_layout()
+
+        # Save to bytes buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+        buf.seek(0)
+        plt.close(fig)
+
+        # ── Build text summary ────────────────────────────────────
+        b_wins = (df["winner"] == "B").sum()
+        a_wins = (df["winner"] == "A").sum()
+        ties   = (df["winner"] == "tie").sum()
+        final_a = df["value_a"].iloc[-1]
+        final_b = df["value_b"].iloc[-1]
+        start_val = min(df["value_a"].iloc[0], df["value_b"].iloc[0])
+
+        ret_a = (final_a / start_val - 1) * 100
+        ret_b = (final_b / start_val - 1) * 100
+        winner_emoji = "🔵 B" if final_b > final_a else "🔴 A"
+
+        caption = (
+            f"📊 <b>A/B Test · Last {len(df)} days</b>\n\n"
+            f"🔴 Variant A (baseline):  <b>${final_a:,.2f}</b> ({ret_a:+.1f}%)\n"
+            f"🔵 Variant B (aggressive): <b>${final_b:,.2f}</b> ({ret_b:+.1f}%)\n\n"
+            f"📅 Day wins:  A={a_wins}  B={b_wins}  tie={ties}\n"
+            f"🏆 Overall winner: <b>{winner_emoji}</b>\n\n"
+            f"<i>⚠️ Образовательный анализ, не инвестиционный совет</i>"
+        )
+
+        await wait_msg.delete()
+        await update.message.reply_photo(photo=buf, caption=caption, parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"abtest error: {e}")
+        await wait_msg.edit_text(f"❌ Ошибка при построении графика: {e}")
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -344,6 +455,7 @@ def main():
     app.add_handler(CommandHandler("analyze", analyze_handler))
     app.add_handler(CommandHandler("signal", signal_handler))
     app.add_handler(CommandHandler("tickers", tickers_handler))
+    app.add_handler(CommandHandler("abtest", abtest_handler))
 
     # Handle plain text (e.g. user just types "BTC")
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
